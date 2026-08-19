@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Plus, X, Trash2, Pencil, ArrowLeft, Star, Search, Circle } from "lucide-react";
+import { Plus, X, Trash2, Pencil, ArrowLeft, Star, Search, Circle, Move } from "lucide-react";
 import TournamentRoom from "./TournamentRoom.jsx";
 
 /* ---------- static data ---------- */
@@ -22,6 +22,11 @@ const DEF_FIELDS = [
   ["tackling", "Tackling"],
   ["aggression", "Aggression"],
   ["defensiveEngagement", "Defensive Engagement"],
+  ["gkAwareness", "GK Awareness"],
+  ["gkCatching", "GK Catching"],
+  ["gkParrying", "GK Parrying"],
+  ["gkReflexes", "GK Reflexes"],
+  ["gkReach", "GK Reach"],
 ];
 
 const STR_FIELDS = [
@@ -232,6 +237,8 @@ function saveList(key, list) {
     /* ignore */
   }
 }
+const loadObj = loadList;
+const saveObj = saveList;
 
 function loadState() {
   try {
@@ -335,6 +342,45 @@ function Chip({ label, active, onClick, small }) {
 }
 
 /* ---------- Pitch slot tile ---------- */
+
+function EditablePitchTile({ slot, onDrag, onPosChange, pitchRef }) {
+  function handlePointerDown(e) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function handlePointerMove(e) {
+    if (e.buttons === 0) return;
+    const rect = pitchRef.current.getBoundingClientRect();
+    let x = ((e.clientX - rect.left) / rect.width) * 100;
+    let y = ((e.clientY - rect.top) / rect.height) * 100;
+    x = Math.max(3, Math.min(97, x));
+    y = Math.max(3, Math.min(97, y));
+    onDrag(slot.id, x, y);
+  }
+  return (
+    <div
+      className="absolute flex flex-col items-center gap-0.5 touch-none"
+      style={{ left: `${slot.x}%`, top: `${slot.y}%`, transform: "translate(-50%,-50%)" }}
+    >
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        className="rounded-full flex items-center justify-center font-display font-bold text-[13px] cursor-grab"
+        style={{ width: 42, height: 42, background: "#9BE83A", color: "#0F2308", border: "2px solid rgba(255,255,255,0.4)" }}
+      >
+        <Move size={16} />
+      </div>
+      <select
+        value={slot.pos}
+        onChange={(e) => onPosChange(slot.id, e.target.value)}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="text-[9px] uppercase rounded px-1 py-0.5 outline-none"
+        style={{ background: "#0B1210", color: "#9BE83A", border: "1px solid #223028" }}
+      >
+        {POSITIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+      </select>
+    </div>
+  );
+}
 
 function PitchTile({ slot, player, onClick }) {
   const color = player ? ovrTier(player.ovr) : "#3A4A41";
@@ -850,12 +896,56 @@ export default function App() {
     setPlayers((prev) => prev.map((pl) => ({ ...pl, playStyles: pl.playStyles.filter((s) => s !== name) })));
   }
   const [formation, setFormation] = useState("4-3-3");
+  const [customFormations, setCustomFormations] = useState(() => loadObj("custom-formations-v1", {}));
+  const [editingFormation, setEditingFormation] = useState(false);
+  const [draftSlots, setDraftSlots] = useState(null);
+  const [saveFormationName, setSaveFormationName] = useState("");
+  const [showSaveFormation, setShowSaveFormation] = useState(false);
+  const pitchRef = useRef(null);
   const [starting, setStarting] = useState({});
   const [subs, setSubs] = useState(Array(7).fill(null));
   const [tab, setTab] = useState("pitch");
   const [pickerCtx, setPickerCtx] = useState(null);
   const [viewPlayer, setViewPlayer] = useState(null);
   const [editPlayer, setEditPlayer] = useState(null);
+
+  function getSlotsFor(key) {
+    return FORMATIONS[key] || customFormations[key] || FORMATIONS["4-3-3"];
+  }
+  function startEditFormation() {
+    setDraftSlots(getSlotsFor(formation).map((s) => ({ ...s })));
+    setSaveFormationName(FORMATIONS[formation] ? "" : formation);
+    setEditingFormation(true);
+  }
+  function cancelEditFormation() {
+    setEditingFormation(false);
+    setDraftSlots(null);
+  }
+  function dragSlot(slotId, x, y) {
+    setDraftSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, x, y } : s)));
+  }
+  function changeSlotPos(slotId, pos) {
+    setDraftSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, pos } : s)));
+  }
+  function confirmSaveFormation() {
+    const name = saveFormationName.trim();
+    if (!name) return;
+    const next = { ...customFormations, [name]: draftSlots };
+    setCustomFormations(next);
+    saveObj("custom-formations-v1", next);
+    setFormation(name);
+    setEditingFormation(false);
+    setDraftSlots(null);
+    setShowSaveFormation(false);
+    setSaveFormationName("");
+  }
+  function deleteCustomFormation(name) {
+    const next = { ...customFormations };
+    delete next[name];
+    setCustomFormations(next);
+    saveObj("custom-formations-v1", next);
+    if (formation === name) setFormation("4-3-3");
+  }
 
   const [managers, setManagers] = useState([]);
   const [teamStyleList, setTeamStyleList] = useState(() => loadList("team-styles-list-v1", DEFAULT_TEAM_STYLES));
@@ -906,7 +996,7 @@ export default function App() {
   const byId = (id) => players.find((p) => p.id === id);
   const usedIds = new Set([...Object.values(starting), ...subs].filter(Boolean));
   const reserves = players.filter((p) => !usedIds.has(p.id));
-  const slots = FORMATIONS[formation];
+  const slots = getSlotsFor(formation);
   const filledStarters = slots.map((s) => starting[s.id]).filter(Boolean).map(byId).filter(Boolean);
   const squadOvr = filledStarters.length ? (filledStarters.reduce((a, p) => a + Number(p.ovr), 0) / filledStarters.length).toFixed(2) : "—";
 
@@ -994,12 +1084,31 @@ export default function App() {
       {/* PITCH TAB */}
       {tab === "pitch" && (
         <div className="px-5 pb-24">
-          <div className="flex gap-1.5 mb-3 flex-wrap">
-            {Object.keys(FORMATIONS).map((f) => (
-              <Chip key={f} label={f} small active={formation === f} onClick={() => setFormation(f)} />
-            ))}
-          </div>
+          {!editingFormation ? (
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+              <div className="flex gap-1.5 flex-wrap">
+                {Object.keys(FORMATIONS).map((f) => (
+                  <Chip key={f} label={f} small active={formation === f} onClick={() => setFormation(f)} />
+                ))}
+                {Object.keys(customFormations).map((f) => (
+                  <span key={f} className="flex items-center gap-1 rounded-full pl-3 pr-1.5 py-1 text-xs" style={{ background: formation === f ? "rgba(155,232,58,0.15)" : "transparent", border: `1px solid ${formation === f ? "#9BE83A" : "#2B3A32"}`, color: formation === f ? "#C7FF6E" : "#8FA096" }}>
+                    <button onClick={() => setFormation(f)}>{f}</button>
+                    <button onClick={() => deleteCustomFormation(f)} style={{ color: "#FF8484" }}><X size={11} /></button>
+                  </span>
+                ))}
+              </div>
+              <button onClick={startEditFormation} className="text-xs px-3 py-1.5 rounded-full font-medium" style={{ background: "#17231D", color: "#9BE83A", border: "1px solid #26382E" }}>
+                Custom Formation
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between mb-3 gap-2">
+              <span className="text-xs" style={{ color: "#5C6E64" }}>Drag positions on the pitch, change the label under each dot</span>
+            </div>
+          )}
+
           <div
+            ref={pitchRef}
             className="relative w-full rounded-2xl overflow-hidden"
             style={{
               aspectRatio: "2 / 3",
@@ -1010,10 +1119,48 @@ export default function App() {
             <div className="absolute left-1/2 top-1/2 rounded-full" style={{ width: "34%", aspectRatio: "1/1", border: "1.5px solid rgba(255,255,255,0.15)", transform: "translate(-50%,-50%)" }} />
             <div className="absolute left-1/2 top-0 w-full" style={{ borderTop: "1.5px solid rgba(255,255,255,0.15)", transform: "translateX(-50%)" }} />
             <div className="absolute left-1/2" style={{ top: "50%", width: "100%", borderTop: "1.5px solid rgba(255,255,255,0.15)", transform: "translate(-50%,-50%)" }} />
-            {slots.map((s) => (
-              <PitchTile key={s.id} slot={s} player={byId(starting[s.id])} onClick={() => setPickerCtx({ type: "start", slotId: s.id })} />
-            ))}
+            {editingFormation
+              ? draftSlots.map((s) => (
+                  <EditablePitchTile key={s.id} slot={s} onDrag={dragSlot} onPosChange={changeSlotPos} pitchRef={pitchRef} />
+                ))
+              : slots.map((s) => (
+                  <PitchTile key={s.id} slot={s} player={byId(starting[s.id])} onClick={() => setPickerCtx({ type: "start", slotId: s.id })} />
+                ))}
           </div>
+
+          {editingFormation && (
+            <div className="flex gap-2 mt-3">
+              <button onClick={cancelEditFormation} className="flex-1 py-2 rounded-lg text-sm font-medium" style={{ background: "#151F1A", color: "#8FA096", border: "1px solid #223028" }}>
+                Cancel
+              </button>
+              <button onClick={() => setShowSaveFormation(true)} className="flex-1 py-2 rounded-lg text-sm font-medium" style={{ background: "#9BE83A", color: "#0F2308" }}>
+                Save Formation
+              </button>
+            </div>
+          )}
+
+          {showSaveFormation && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center px-5" style={{ background: "rgba(5,9,8,0.8)" }}>
+              <div className="w-full max-w-sm rounded-2xl p-4" style={{ background: "#101815", border: "1px solid #223028" }}>
+                <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>Formation Name</label>
+                <input
+                  value={saveFormationName}
+                  onChange={(e) => setSaveFormationName(e.target.value)}
+                  placeholder="e.g. My 4-1-4-1"
+                  className="w-full mt-1 rounded-lg px-3 py-2 text-[15px] outline-none"
+                  style={{ background: "#0B1210", border: "1px solid #223028", color: "#F1F7F3" }}
+                />
+                <div className="flex gap-2 mt-3">
+                  <button onClick={() => setShowSaveFormation(false)} className="flex-1 py-2 rounded-lg text-sm font-medium" style={{ background: "#151F1A", color: "#8FA096", border: "1px solid #223028" }}>
+                    Cancel
+                  </button>
+                  <button onClick={confirmSaveFormation} className="flex-1 py-2 rounded-lg text-sm font-medium" style={{ background: "#9BE83A", color: "#0F2308" }}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
