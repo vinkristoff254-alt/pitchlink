@@ -63,6 +63,7 @@ const BODY_PHYSICS_FIELDS = [
   ["weakFootUsage", "Weak Foot Usage", 1, 4],
   ["weakFootAccuracy", "Weak Foot Accuracy", 1, 99],
   ["injuryResistance", "Injury Resistance", 1, 3],
+  ["form", "Form", 1, 3],
 ];
 
 const PREFERRED_FOOT_OPTIONS = ["Right", "Left", "Both"];
@@ -188,6 +189,103 @@ const DEFAULT_TEAM_STYLES = [
   "Possession Game", "Quick Counter", "Long Ball Counter", "Out Wide",
   "Long Ball", "Overload", "Counter Press", "High Press", "Contain", "Deep Defense",
 ];
+
+/* ---------- paste-to-fill stat parser ----------
+   Lets the person paste a player's stat block copied from a site like
+   pesdb.net, and auto-fills matching fields. This parses text the person
+   has already copied themselves — it does not fetch or scrape anything. */
+
+const IMPORT_LABEL_MAP = {
+  "offensive awareness": ["attacking", "offensiveAwareness"],
+  "ball control": ["attacking", "ballControl"],
+  "dribbling": ["attacking", "dribbling"],
+  "tight possession": ["attacking", "tightPossession"],
+  "low pass": ["attacking", "lowPass"],
+  "lofted pass": ["attacking", "loftedPass"],
+  "finishing": ["attacking", "finishing"],
+  "heading": ["attacking", "heading"],
+  "set piece taking": ["attacking", "placeKicking"],
+  "place kicking": ["attacking", "placeKicking"],
+  "curl": ["attacking", "curl"],
+  "defensive awareness": ["defending", "defensiveAwareness"],
+  "tackling": ["defending", "tackling"],
+  "aggression": ["defending", "aggression"],
+  "defensive engagement": ["defending", "defensiveEngagement"],
+  "gk awareness": ["defending", "gkAwareness"],
+  "gk catching": ["defending", "gkCatching"],
+  "gk parrying": ["defending", "gkParrying"],
+  "gk reflexes": ["defending", "gkReflexes"],
+  "gk reach": ["defending", "gkReach"],
+  "speed": ["strength", "speed"],
+  "acceleration": ["strength", "acceleration"],
+  "kicking power": ["strength", "kickingPower"],
+  "jumping": ["strength", "jumping"],
+  "physical contact": ["strength", "physicalContact"],
+  "balance": ["strength", "balance"],
+  "stamina": ["strength", "stamina"],
+  "height": ["bodyPhysics", "height"],
+  "weight": ["bodyPhysics", "weight"],
+  "age": ["bodyPhysics", "age"],
+};
+
+const WEAK_FOOT_USAGE_MAP = { "almost never": 1, "rarely": 2, "occasionally": 3, "regularly": 4 };
+const WEAK_FOOT_ACCURACY_MAP = { "low": 25, "medium": 55, "high": 75, "very high": 95 };
+const INJURY_RESISTANCE_MAP = { "low": 1, "medium": 2, "high": 3 };
+const FORM_MAP = { "inconsistent": 1, "standard": 2, "unwavering": 3 };
+const FOOT_MAP = { "right foot": "Right", "left foot": "Left", "both": "Both", "right": "Right", "left": "Left" };
+
+function parsePastedStats(text, skillsList, additionalSkillsList, styleList) {
+  const patch = {
+    attacking: {}, defending: {}, strength: {}, bodyPhysics: {},
+    skills: [], playStyles: [],
+  };
+  let name = null, position = null, ovr = null, matchedCount = 0;
+
+  const knownSkills = new Set([...skillsList, ...additionalSkillsList].map((s) => s.toLowerCase()));
+  const knownStyles = new Set(styleList.map((s) => s.toLowerCase()));
+
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  for (const line of lines) {
+    const m = line.match(/^([A-Za-z .()'/-]+):\s*(.+)$/);
+    if (m) {
+      const label = m[1].trim().toLowerCase();
+      const value = m[2].trim();
+
+      if (label === "player name") { name = value; matchedCount++; continue; }
+      if (label === "position") { position = value.toUpperCase(); matchedCount++; continue; }
+      if (label === "overall rating") { const n = parseInt(value, 10); if (!isNaN(n)) { ovr = n; matchedCount++; } continue; }
+      if (label === "foot") { const f = FOOT_MAP[value.toLowerCase()]; if (f) { patch.preferredFoot = f; matchedCount++; } continue; }
+      if (label === "weak foot usage") { const n = WEAK_FOOT_USAGE_MAP[value.toLowerCase()]; if (n) { patch.bodyPhysics.weakFootUsage = n; matchedCount++; } continue; }
+      if (label === "weak foot accuracy") { const n = WEAK_FOOT_ACCURACY_MAP[value.toLowerCase()]; if (n) { patch.bodyPhysics.weakFootAccuracy = n; matchedCount++; } continue; }
+      if (label === "injury resistance") { const n = INJURY_RESISTANCE_MAP[value.toLowerCase()]; if (n) { patch.bodyPhysics.injuryResistance = n; matchedCount++; } continue; }
+      if (label === "form") { const n = FORM_MAP[value.toLowerCase()]; if (n) { patch.bodyPhysics.form = n; matchedCount++; } continue; }
+      if (label === "att" || label === "attacking style" || label === "def" || label === "defensive style") {
+        const match = [...knownStyles].find((s) => s === value.toLowerCase());
+        if (match && value.toLowerCase() !== "basic" && patch.playStyles.length < 2) {
+          const original = styleList.find((s) => s.toLowerCase() === match);
+          patch.playStyles.push(original);
+          matchedCount++;
+        }
+        continue;
+      }
+
+      const mapped = IMPORT_LABEL_MAP[label];
+      if (mapped) {
+        const n = parseInt(value, 10);
+        if (!isNaN(n)) {
+          if (mapped[0] === "ovr") { ovr = n; } else { patch[mapped[0]][mapped[1]] = n; }
+          matchedCount++;
+        }
+      }
+    } else if (knownSkills.has(line.toLowerCase())) {
+      const original = [...skillsList, ...additionalSkillsList].find((s) => s.toLowerCase() === line.toLowerCase());
+      if (original && !patch.skills.includes(original)) { patch.skills.push(original); matchedCount++; }
+    }
+  }
+
+  return { patch, name, position, ovr, matchedCount };
+}
 
 function normalizePlayer(p) {
   const base = emptyPlayer();
@@ -615,6 +713,9 @@ function PlayerEditor({
   onSave, onCancel,
 }) {
   const [p, setP] = useState(initial);
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteResult, setPasteResult] = useState(null);
 
   const toggleArr = (field, val, max) =>
     setP((prev) => {
@@ -623,6 +724,24 @@ function PlayerEditor({
       if (max && prev[field].length >= max) return prev;
       return { ...prev, [field]: [...prev[field], val] };
     });
+
+  function applyPaste() {
+    const { patch, name, position, ovr, matchedCount } = parsePastedStats(pasteText, skillsList, additionalSkillsList, styleList);
+    setP((prev) => ({
+      ...prev,
+      name: name || prev.name,
+      position: (position && POSITIONS.includes(position)) ? position : prev.position,
+      ovr: ovr != null ? ovr : prev.ovr,
+      preferredFoot: patch.preferredFoot || prev.preferredFoot,
+      attacking: { ...prev.attacking, ...patch.attacking },
+      defending: { ...prev.defending, ...patch.defending },
+      strength: { ...prev.strength, ...patch.strength },
+      bodyPhysics: { ...prev.bodyPhysics, ...patch.bodyPhysics },
+      skills: [...new Set([...prev.skills, ...patch.skills])],
+      playStyles: patch.playStyles.length ? patch.playStyles.slice(0, 2) : prev.playStyles,
+    }));
+    setPasteResult(matchedCount);
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(5,9,8,0.8)" }}>
@@ -638,6 +757,45 @@ function PlayerEditor({
             Save
           </button>
         </div>
+
+        <div className="px-5 pt-4">
+          <button
+            onClick={() => { setShowPaste(true); setPasteResult(null); }}
+            className="w-full py-2 rounded-lg text-sm font-medium"
+            style={{ background: "#17231D", color: "#9BE83A", border: "1px solid #26382E" }}
+          >
+            Paste Player Stats to Auto-Fill
+          </button>
+        </div>
+
+        {showPaste && (
+          <div className="px-5 pt-3">
+            <p className="text-xs mb-2" style={{ color: "#5C6E64" }}>
+              Copy the stat block from a site like pesdb.net (Player Name, Position, all abilities, Overall Rating, etc.) and paste it below.
+            </p>
+            <textarea
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              placeholder={"Player Name: Kylian Mbappé\nPosition: CF\nOffensive Awareness: 80\n..."}
+              rows={6}
+              className="w-full rounded-lg px-3 py-2 text-[13px] outline-none resize-none"
+              style={{ background: "#0B1210", border: "1px solid #223028", color: "#F1F7F3" }}
+            />
+            <div className="flex gap-2 mt-2">
+              <button onClick={() => { setShowPaste(false); setPasteText(""); }} className="flex-1 py-1.5 rounded-lg text-xs" style={{ background: "#151F1A", color: "#8FA096", border: "1px solid #223028" }}>
+                Close
+              </button>
+              <button onClick={applyPaste} className="flex-1 py-1.5 rounded-lg text-xs font-medium" style={{ background: "#9BE83A", color: "#0F2308" }}>
+                Parse &amp; Fill
+              </button>
+            </div>
+            {pasteResult != null && (
+              <p className="text-xs mt-2" style={{ color: pasteResult > 0 ? "#9BE83A" : "#FF8484" }}>
+                {pasteResult > 0 ? `Filled ${pasteResult} field${pasteResult === 1 ? "" : "s"}.` : "Nothing recognized — check the pasted format."}
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="px-5 py-4 space-y-5">
           <div>
