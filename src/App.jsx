@@ -17,6 +17,51 @@ const ATT_FIELDS = [
   ["curl", "Curl"],
 ];
 
+const DEF_FIELDS = [
+  ["defensiveAwareness", "Defensive Awareness"],
+  ["tackling", "Tackling"],
+  ["aggression", "Aggression"],
+  ["defensiveEngagement", "Defensive Engagement"],
+];
+
+const STR_FIELDS = [
+  ["speed", "Speed"],
+  ["acceleration", "Acceleration"],
+  ["kickingPower", "Kicking Power"],
+  ["jumping", "Jumping"],
+  ["physicalContact", "Physical Contact"],
+  ["balance", "Balance"],
+  ["stamina", "Stamina"],
+];
+
+// Body Model uses a small 1-15 scale (matches in-game body-shape sliders),
+// unlike the 1-99 ability stats above.
+const BODY_MODEL_FIELDS = [
+  ["armLength", "Arm Length"],
+  ["shoulderWidth", "Shoulder Width"],
+  ["neckLength", "Neck Length"],
+  ["chestMeasurement", "Chest Measurement"],
+  ["neckSize", "Neck Size"],
+  ["shoulderHeight", "Shoulder Height"],
+  ["legLength", "Leg Length"],
+  ["thighSize", "Thigh Size"],
+  ["waistSize", "Waist Size"],
+  ["armSize", "Arm Size"],
+  ["calfSize", "Calf Size"],
+];
+
+// Body Physics: real-world physical attributes, each with its own sensible range.
+const BODY_PHYSICS_FIELDS = [
+  ["height", "Height (cm)", 150, 210],
+  ["weight", "Weight (kg)", 50, 100],
+  ["age", "Age", 15, 45],
+  ["weakFootUsage", "Weak Foot Usage", 1, 4],
+  ["weakFootAccuracy", "Weak Foot Accuracy", 1, 99],
+  ["injuryResistance", "Injury Resistance", 1, 3],
+];
+
+const PREFERRED_FOOT_OPTIONS = ["Right", "Left", "Both"];
+
 const POSITIONS = ["GK", "CB", "LB", "RB", "DMF", "CMF", "LMF", "RMF", "AMF", "LWF", "RWF", "SS", "CF"];
 
 const DEFAULT_PLAY_STYLES = [
@@ -95,6 +140,8 @@ const FORMATIONS = {
   ],
 };
 
+const DEFAULT_ADDITIONAL_SKILLS = [];
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 const emptyPlayer = () => ({
@@ -104,8 +151,14 @@ const emptyPlayer = () => ({
   ovr: 80,
   playStyles: [],
   attacking: Object.fromEntries(ATT_FIELDS.map(([k]) => [k, 70])),
+  defending: Object.fromEntries(DEF_FIELDS.map(([k]) => [k, 50])),
+  strength: Object.fromEntries(STR_FIELDS.map(([k]) => [k, 70])),
+  bodyModel: Object.fromEntries(BODY_MODEL_FIELDS.map(([k]) => [k, 7])),
+  bodyPhysics: Object.fromEntries(BODY_PHYSICS_FIELDS.map(([k]) => [k, 0])),
+  preferredFoot: "Right",
   boosted: [],
   skills: [],
+  additionalSkills: [],
 });
 
 const SAMPLE_PLAYERS = [
@@ -113,10 +166,40 @@ const SAMPLE_PLAYERS = [
     id: uid(), name: "P. E. Aubameyang", position: "CF", ovr: 102.32,
     playStyles: ["Goal Poacher", "Fox in the Box"],
     attacking: { offensiveAwareness: 95, ballControl: 83, dribbling: 87, tightPossession: 80, lowPass: 66, loftedPass: 64, finishing: 89, heading: 76, placeKicking: 76, curl: 82 },
+    defending: { defensiveAwareness: 46, tackling: 50, aggression: 51, defensiveEngagement: 49 },
+    strength: { speed: 95, acceleration: 95, kickingPower: 84, jumping: 82, physicalContact: 78, balance: 87, stamina: 89 },
+    bodyModel: { armLength: 8, shoulderWidth: 5, neckLength: 7, chestMeasurement: 6, neckSize: 7, shoulderHeight: 7, legLength: 11, thighSize: 6, waistSize: 5, armSize: 8, calfSize: 6 },
+    bodyPhysics: { height: 187, weight: 80, age: 34, weakFootUsage: 3, weakFootAccuracy: 76, injuryResistance: 2 },
+    preferredFoot: "Right",
     boosted: ["offensiveAwareness", "ballControl"],
     skills: ["First-time Shot", "Acrobatic Finishing", "Long Range Drive"],
+    additionalSkills: [],
   },
 ];
+
+const emptyManager = () => ({ id: uid(), name: "", teamStyles: [], notes: "" });
+
+const DEFAULT_TEAM_STYLES = [
+  "Possession Game", "Quick Counter", "Long Ball Counter", "Out Wide",
+  "Long Ball", "Overload", "Counter Press", "High Press", "Contain", "Deep Defense",
+];
+
+function normalizePlayer(p) {
+  const base = emptyPlayer();
+  return {
+    ...base,
+    ...p,
+    attacking: { ...base.attacking, ...(p.attacking || {}) },
+    defending: { ...base.defending, ...(p.defending || {}) },
+    strength: { ...base.strength, ...(p.strength || {}) },
+    bodyModel: { ...base.bodyModel, ...(p.bodyModel || {}) },
+    bodyPhysics: { ...base.bodyPhysics, ...(p.bodyPhysics || {}) },
+    playStyles: p.playStyles || [],
+    boosted: p.boosted || [],
+    skills: p.skills || [],
+    additionalSkills: p.additionalSkills || [],
+  };
+}
 
 /* ---------- helpers ---------- */
 
@@ -193,6 +276,48 @@ function StatPill({ value }) {
   );
 }
 
+function NeutralPill({ value }) {
+  return (
+    <span
+      className="font-display px-2 py-0.5 rounded text-[15px] font-bold min-w-[34px] text-center inline-block"
+      style={{ background: "#1B2A22", color: "#9BE83A" }}
+    >
+      {value}
+    </span>
+  );
+}
+
+// Fixed-width numeric field for stat entry. Keeps its own local text state
+// while the person is typing and only clamps to [min, max] on blur — this is
+// what stops it from snapping to the max value mid-edit on mobile.
+function NumberField({ value, onChange, min = 1, max = 99 }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(String(value)); }, [value]);
+
+  function commit() {
+    let n = parseInt(text, 10);
+    if (isNaN(n)) n = min;
+    n = Math.max(min, Math.min(max, n));
+    setText(String(n));
+    if (n !== value) onChange(n);
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      pattern="[0-9]*"
+      value={text}
+      onChange={(e) => setText(e.target.value.replace(/[^0-9]/g, ""))}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+      onFocus={(e) => e.target.select()}
+      className="w-16 rounded-lg px-2 py-1 text-center text-[14px] outline-none"
+      style={{ background: "#0B1210", border: "1px solid #223028", color: "#F1F7F3" }}
+    />
+  );
+}
+
 function Chip({ label, active, onClick, small }) {
   return (
     <button
@@ -244,6 +369,41 @@ function PitchTile({ slot, player, onClick }) {
 
 /* ---------- Player detail card ---------- */
 
+function StatSectionView({ title, fields, values, boosted, pillType = "tier" }) {
+  return (
+    <div className="px-5 py-3" style={{ borderTop: "1px solid #1D2A23" }}>
+      <h3 className="text-xs uppercase tracking-widest mb-2" style={{ color: "#5C6E64" }}>{title}</h3>
+      <div className="space-y-1.5">
+        {fields.map(([k, label]) => (
+          <div key={k} className="flex items-center justify-between py-1">
+            <div className="flex items-center gap-2">
+              {boosted && boosted.includes(k) && <Circle size={7} fill="#3FE8D6" stroke="none" />}
+              <span className="font-body text-[14px]" style={{ color: "#CBD9D0" }}>{label}</span>
+            </div>
+            {pillType === "tier" ? <StatPill value={values[k]} /> : <NeutralPill value={values[k]} />}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ChipSectionView({ title, items }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="px-5 py-3" style={{ borderTop: "1px solid #1D2A23" }}>
+      <h3 className="text-xs uppercase tracking-widest mb-2" style={{ color: "#5C6E64" }}>{title}</h3>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((s) => (
+          <span key={s} className="text-xs px-2.5 py-1 rounded-full" style={{ background: "#17231D", color: "#9BE83A", border: "1px solid #26382E" }}>
+            {s}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PlayerCard({ player, onClose, onEdit, onDelete }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(5,9,8,0.75)" }}>
@@ -270,47 +430,38 @@ function PlayerCard({ player, onClose, onEdit, onDelete }) {
           <div className="mt-3 inline-block px-4 py-1 rounded-lg font-display font-bold text-2xl" style={{ background: ovrTier(player.ovr), color: "#0B1210" }}>
             {player.ovr}
           </div>
-          <div className="text-xs mt-1 tracking-widest uppercase" style={{ color: "#5C6E64" }}>{player.position}</div>
-        </div>
-
-        <div className="px-5 py-3">
-          <h3 className="text-xs uppercase tracking-widest mb-2" style={{ color: "#5C6E64" }}>Attacking</h3>
-          <div className="space-y-1.5">
-            {ATT_FIELDS.map(([k, label]) => (
-              <div key={k} className="flex items-center justify-between py-1">
-                <div className="flex items-center gap-2">
-                  {player.boosted.includes(k) && <Circle size={7} fill="#3FE8D6" stroke="none" />}
-                  <span className="font-body text-[14px]" style={{ color: "#CBD9D0" }}>{label}</span>
-                </div>
-                <StatPill value={player.attacking[k]} />
-              </div>
-            ))}
+          <div className="text-xs mt-1 tracking-widest uppercase" style={{ color: "#5C6E64" }}>
+            {player.position} · {player.preferredFoot} Foot
           </div>
         </div>
 
-        {player.skills.length > 0 && (
-          <div className="px-5 py-3" style={{ borderTop: "1px solid #1D2A23" }}>
-            <h3 className="text-xs uppercase tracking-widest mb-2" style={{ color: "#5C6E64" }}>Skills</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {player.skills.map((s) => (
-                <span key={s} className="text-xs px-2.5 py-1 rounded-full" style={{ background: "#17231D", color: "#9BE83A", border: "1px solid #26382E" }}>
-                  {s}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
+        <StatSectionView title="Attacking Awareness" fields={ATT_FIELDS} values={player.attacking} boosted={player.boosted} />
+        <StatSectionView title="Defending" fields={DEF_FIELDS} values={player.defending} boosted={player.boosted} />
+        <StatSectionView title="Strength" fields={STR_FIELDS} values={player.strength} boosted={player.boosted} />
+        <StatSectionView title="Body Model" fields={BODY_MODEL_FIELDS} values={player.bodyModel} pillType="neutral" />
+        <StatSectionView
+          title="Body Physics"
+          fields={BODY_PHYSICS_FIELDS.map(([k, label]) => [k, label])}
+          values={player.bodyPhysics}
+          pillType="neutral"
+        />
+
+        <ChipSectionView title="Skills" items={player.skills} />
+        <ChipSectionView title="Additional Skills" items={player.additionalSkills} />
 
         {player.boosted.length > 0 && (
           <div className="px-5 py-3 pb-6" style={{ borderTop: "1px solid #1D2A23" }}>
             <h3 className="text-xs uppercase tracking-widest mb-2" style={{ color: "#5C6E64" }}>Boosters Active</h3>
             <div className="flex flex-wrap gap-1.5">
-              {player.boosted.map((k) => (
-                <span key={k} className="text-xs px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: "#0F2323", color: "#3FE8D6", border: "1px solid #1D3A38" }}>
-                  <Circle size={6} fill="#3FE8D6" stroke="none" />
-                  {ATT_FIELDS.find((f) => f[0] === k)?.[1]}
-                </span>
-              ))}
+              {player.boosted.map((k) => {
+                const f = [...ATT_FIELDS, ...DEF_FIELDS, ...STR_FIELDS].find((f) => f[0] === k);
+                return (
+                  <span key={k} className="text-xs px-2.5 py-1 rounded-full flex items-center gap-1" style={{ background: "#0F2323", color: "#3FE8D6", border: "1px solid #1D3A38" }}>
+                    <Circle size={6} fill="#3FE8D6" stroke="none" />
+                    {f?.[1] || k}
+                  </span>
+                );
+              })}
             </div>
           </div>
         )}
@@ -381,10 +532,44 @@ function ManageableChipList({ label, hint, list, selected, onToggle, max, onAdd,
 
 /* ---------- Player editor ---------- */
 
-function PlayerEditor({ initial, skillsList, styleList, onAddSkill, onRemoveSkill, onAddStyle, onRemoveStyle, onSave, onCancel }) {
+function EditableStatSection({ title, hint, fields, section, p, setP, boostable }) {
+  const setVal = (k, v) => setP((prev) => ({ ...prev, [section]: { ...prev[section], [k]: v } }));
+  const toggleBoost = (k) =>
+    setP((prev) => ({
+      ...prev,
+      boosted: prev.boosted.includes(k) ? prev.boosted.filter((x) => x !== k) : [...prev.boosted, k],
+    }));
+
+  return (
+    <div>
+      <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>
+        {title} {hint && <span style={{ color: "#3FE8D6" }}>· {hint}</span>}
+      </label>
+      <div className="mt-2 space-y-2">
+        {fields.map(([k, label, min, max]) => (
+          <div key={k} className="flex items-center gap-2">
+            {boostable && (
+              <button onClick={() => toggleBoost(k)} className="shrink-0" title="Toggle booster">
+                <Circle size={12} fill={p.boosted.includes(k) ? "#3FE8D6" : "none"} stroke={p.boosted.includes(k) ? "#3FE8D6" : "#3A4A41"} />
+              </button>
+            )}
+            <span className="text-[13px] flex-1" style={{ color: "#CBD9D0" }}>{label}</span>
+            <NumberField value={p[section][k]} onChange={(v) => setVal(k, v)} min={min ?? 1} max={max ?? 99} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlayerEditor({
+  initial, skillsList, styleList, additionalSkillsList,
+  onAddSkill, onRemoveSkill, onAddStyle, onRemoveStyle,
+  onAddAdditionalSkill, onRemoveAdditionalSkill,
+  onSave, onCancel,
+}) {
   const [p, setP] = useState(initial);
 
-  const setAtt = (k, v) => setP({ ...p, attacking: { ...p.attacking, [k]: Math.max(1, Math.min(99, Number(v) || 0)) } });
   const toggleArr = (field, val, max) =>
     setP((prev) => {
       const has = prev[field].includes(val);
@@ -408,7 +593,7 @@ function PlayerEditor({ initial, skillsList, styleList, onAddSkill, onRemoveSkil
           </button>
         </div>
 
-        <div className="px-5 py-4 space-y-4">
+        <div className="px-5 py-4 space-y-5">
           <div>
             <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>Name</label>
             <input
@@ -444,8 +629,24 @@ function PlayerEditor({ initial, skillsList, styleList, onAddSkill, onRemoveSkil
             </div>
           </div>
 
+          <div>
+            <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>Preferred Foot</label>
+            <div className="flex gap-2 mt-2">
+              {PREFERRED_FOOT_OPTIONS.map((foot) => (
+                <button
+                  key={foot}
+                  onClick={() => setP({ ...p, preferredFoot: foot })}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-medium"
+                  style={{ background: p.preferredFoot === foot ? "#9BE83A" : "#0B1210", color: p.preferredFoot === foot ? "#0F2308" : "#8FA096", border: "1px solid #223028" }}
+                >
+                  {foot}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <ManageableChipList
-            label="Playing Styles"
+            label="Playstyles"
             hint="max 2"
             list={styleList}
             selected={p.playStyles}
@@ -455,39 +656,121 @@ function PlayerEditor({ initial, skillsList, styleList, onAddSkill, onRemoveSkil
             onRemove={(s) => { onRemoveStyle(s); setP((prev) => ({ ...prev, playStyles: prev.playStyles.filter((x) => x !== s) })); }}
           />
 
-          <div>
-            <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>
-              Attacking Stats <span style={{ color: "#3FE8D6" }}>· tap dot to boost</span>
-            </label>
-            <div className="mt-2 space-y-2">
-              {ATT_FIELDS.map(([k, label]) => (
-                <div key={k} className="flex items-center gap-2">
-                  <button onClick={() => toggleArr("boosted", k)} className="shrink-0" title="Toggle booster">
-                    <Circle size={12} fill={p.boosted.includes(k) ? "#3FE8D6" : "none"} stroke={p.boosted.includes(k) ? "#3FE8D6" : "#3A4A41"} />
-                  </button>
-                  <span className="text-[13px] flex-1" style={{ color: "#CBD9D0" }}>{label}</span>
-                  <input
-                    type="number" min="1" max="99"
-                    value={p.attacking[k]}
-                    onChange={(e) => setAtt(k, e.target.value)}
-                    className="w-16 rounded-lg px-2 py-1 text-center text-[14px] outline-none"
-                    style={{ background: "#0B1210", border: "1px solid #223028", color: "#F1F7F3" }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
+          <EditableStatSection title="Attacking Awareness" hint="tap dot to boost" fields={ATT_FIELDS} section="attacking" p={p} setP={setP} boostable />
+          <EditableStatSection title="Defending" hint="tap dot to boost" fields={DEF_FIELDS} section="defending" p={p} setP={setP} boostable />
+          <EditableStatSection title="Strength" hint="tap dot to boost" fields={STR_FIELDS} section="strength" p={p} setP={setP} boostable />
+          <EditableStatSection title="Body Model" hint="1–15 scale" fields={BODY_MODEL_FIELDS.map(([k, l]) => [k, l, 1, 15])} section="bodyModel" p={p} setP={setP} />
+          <EditableStatSection title="Body Physics" fields={BODY_PHYSICS_FIELDS} section="bodyPhysics" p={p} setP={setP} />
+
+          <ManageableChipList
+            label="Skills"
+            list={skillsList}
+            selected={p.skills}
+            onToggle={(s) => toggleArr("skills", s)}
+            onAdd={onAddSkill}
+            onRemove={(s) => { onRemoveSkill(s); setP((prev) => ({ ...prev, skills: prev.skills.filter((x) => x !== s) })); }}
+          />
 
           <div className="pb-4">
             <ManageableChipList
-              label="Skills"
-              list={skillsList}
-              selected={p.skills}
-              onToggle={(s) => toggleArr("skills", s)}
-              onAdd={onAddSkill}
-              onRemove={(s) => { onRemoveSkill(s); setP((prev) => ({ ...prev, skills: prev.skills.filter((x) => x !== s) })); }}
+              label="Additional Skills"
+              list={additionalSkillsList}
+              selected={p.additionalSkills}
+              onToggle={(s) => toggleArr("additionalSkills", s)}
+              onAdd={onAddAdditionalSkill}
+              onRemove={(s) => { onRemoveAdditionalSkill(s); setP((prev) => ({ ...prev, additionalSkills: prev.additionalSkills.filter((x) => x !== s) })); }}
             />
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Manager / coach editor & card ---------- */
+
+function ManagerEditor({ initial, teamStyleList, onAddStyle, onRemoveStyle, onSave, onCancel }) {
+  const [m, setM] = useState(initial);
+  const toggle = (s) =>
+    setM((prev) => ({
+      ...prev,
+      teamStyles: prev.teamStyles.includes(s) ? prev.teamStyles.filter((x) => x !== s) : [...prev.teamStyles, s],
+    }));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(5,9,8,0.8)" }}>
+      <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto" style={{ background: "#101815", border: "1px solid #223028" }}>
+        <div className="sticky top-0 flex items-center justify-between px-4 py-3" style={{ background: "#101815", borderBottom: "1px solid #1D2A23" }}>
+          <button onClick={onCancel} className="text-[#8FA096] text-sm">Cancel</button>
+          <span className="font-display uppercase tracking-wide text-sm" style={{ color: "#F1F7F3" }}>Edit Manager</span>
+          <button
+            onClick={() => m.name.trim() && onSave(m)}
+            className="text-sm font-semibold px-3 py-1 rounded-full"
+            style={{ background: "#9BE83A", color: "#0F2308" }}
+          >
+            Save
+          </button>
+        </div>
+        <div className="px-5 py-4 space-y-4">
+          <div>
+            <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>Name</label>
+            <input
+              value={m.name}
+              onChange={(e) => setM({ ...m, name: e.target.value })}
+              placeholder="Manager name"
+              className="w-full mt-1 rounded-lg px-3 py-2 text-[15px] outline-none"
+              style={{ background: "#0B1210", border: "1px solid #223028", color: "#F1F7F3" }}
+            />
+          </div>
+          <ManageableChipList
+            label="Team Playstyle"
+            list={teamStyleList}
+            selected={m.teamStyles}
+            onToggle={(s) => toggle(s)}
+            onAdd={onAddStyle}
+            onRemove={(s) => { onRemoveStyle(s); setM((prev) => ({ ...prev, teamStyles: prev.teamStyles.filter((x) => x !== s) })); }}
+          />
+          <div className="pb-4">
+            <label className="text-xs uppercase tracking-widest" style={{ color: "#5C6E64" }}>Notes</label>
+            <textarea
+              value={m.notes}
+              onChange={(e) => setM({ ...m, notes: e.target.value })}
+              placeholder="Preferred formation, tactics, anything worth remembering"
+              rows={3}
+              className="w-full mt-1 rounded-lg px-3 py-2 text-[14px] outline-none resize-none"
+              style={{ background: "#0B1210", border: "1px solid #223028", color: "#F1F7F3" }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ManagerCard({ manager, onClose, onEdit, onDelete }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(5,9,8,0.75)" }}>
+      <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl max-h-[88vh] overflow-y-auto" style={{ background: "#101815", border: "1px solid #223028" }}>
+        <div className="sticky top-0 flex items-center justify-between px-4 py-3" style={{ background: "#101815", borderBottom: "1px solid #1D2A23" }}>
+          <button onClick={onClose} className="text-[#8FA096]"><ArrowLeft size={20} /></button>
+          <div className="flex gap-3">
+            <button onClick={() => onEdit(manager)} className="text-[#8FA096]"><Pencil size={18} /></button>
+            <button onClick={() => onDelete(manager.id)} className="text-[#FF5C5C]"><Trash2 size={18} /></button>
+          </div>
+        </div>
+        <div className="px-5 pt-4 pb-6 text-center">
+          <h2 className="font-display uppercase tracking-wide text-2xl font-bold" style={{ color: "#F1F7F3" }}>{manager.name}</h2>
+          <div className="flex justify-center gap-1.5 mt-3 flex-wrap">
+            {manager.teamStyles.map((s) => (
+              <span key={s} className="text-[11px] uppercase tracking-wide px-2.5 py-1 rounded-full" style={{ background: "#17231D", color: "#9BE83A", border: "1px solid #26382E" }}>
+                {s}
+              </span>
+            ))}
+            {manager.teamStyles.length === 0 && <span className="text-xs" style={{ color: "#5C6E64" }}>No team playstyle set</span>}
+          </div>
+          {manager.notes && (
+            <p className="text-sm mt-4 text-left" style={{ color: "#CBD9D0" }}>{manager.notes}</p>
+          )}
         </div>
       </div>
     </div>
@@ -543,6 +826,7 @@ export default function App() {
   const [players, setPlayers] = useState(SAMPLE_PLAYERS);
   const [skillsList, setSkillsList] = useState(() => loadList("skills-list-v1", DEFAULT_SKILLS));
   const [styleList, setStyleList] = useState(() => loadList("styles-list-v1", DEFAULT_PLAY_STYLES));
+  const [additionalSkillsList, setAdditionalSkillsList] = useState(() => loadList("additional-skills-list-v1", DEFAULT_ADDITIONAL_SKILLS));
 
   function addSkill(name) {
     setSkillsList((prev) => { const next = [...prev, name]; saveList("skills-list-v1", next); return next; });
@@ -550,6 +834,13 @@ export default function App() {
   function removeSkill(name) {
     setSkillsList((prev) => { const next = prev.filter((s) => s !== name); saveList("skills-list-v1", next); return next; });
     setPlayers((prev) => prev.map((pl) => ({ ...pl, skills: pl.skills.filter((s) => s !== name) })));
+  }
+  function addAdditionalSkill(name) {
+    setAdditionalSkillsList((prev) => { const next = [...prev, name]; saveList("additional-skills-list-v1", next); return next; });
+  }
+  function removeAdditionalSkill(name) {
+    setAdditionalSkillsList((prev) => { const next = prev.filter((s) => s !== name); saveList("additional-skills-list-v1", next); return next; });
+    setPlayers((prev) => prev.map((pl) => ({ ...pl, additionalSkills: pl.additionalSkills.filter((s) => s !== name) })));
   }
   function addStyle(name) {
     setStyleList((prev) => { const next = [...prev, name]; saveList("styles-list-v1", next); return next; });
@@ -565,19 +856,43 @@ export default function App() {
   const [pickerCtx, setPickerCtx] = useState(null);
   const [viewPlayer, setViewPlayer] = useState(null);
   const [editPlayer, setEditPlayer] = useState(null);
+
+  const [managers, setManagers] = useState([]);
+  const [teamStyleList, setTeamStyleList] = useState(() => loadList("team-styles-list-v1", DEFAULT_TEAM_STYLES));
+  const [viewManager, setViewManager] = useState(null);
+  const [editManager, setEditManager] = useState(null);
+
+  function addTeamStyle(name) {
+    setTeamStyleList((prev) => { const next = [...prev, name]; saveList("team-styles-list-v1", next); return next; });
+  }
+  function removeTeamStyle(name) {
+    setTeamStyleList((prev) => { const next = prev.filter((s) => s !== name); saveList("team-styles-list-v1", next); return next; });
+    setManagers((prev) => prev.map((mg) => ({ ...mg, teamStyles: mg.teamStyles.filter((s) => s !== name) })));
+  }
+  function saveManager(m) {
+    setManagers((prev) => (prev.some((x) => x.id === m.id) ? prev.map((x) => (x.id === m.id ? m : x)) : [...prev, m]));
+    setEditManager(null);
+    setViewManager((v) => (v && v.id === m.id ? m : v));
+  }
+  function deleteManager(id) {
+    setManagers((prev) => prev.filter((m) => m.id !== id));
+    setViewManager(null);
+  }
+
   const loaded = useRef(false);
 
   useEffect(() => {
     (async () => {
       const saved = loadState();
       if (saved) {
-        setPlayers(saved.players || SAMPLE_PLAYERS);
+        setPlayers((saved.players || SAMPLE_PLAYERS).map(normalizePlayer));
         setFormation(saved.formation || "4-3-3");
         setStarting(saved.starting || {});
         setSubs(saved.subs || Array(7).fill(null));
+        setManagers(saved.managers || []);
       } else {
         const dataset = await loadDatasetPlayers();
-        if (dataset) setPlayers(dataset);
+        if (dataset) setPlayers(dataset.map(normalizePlayer));
       }
       loaded.current = true;
     })();
@@ -585,8 +900,8 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded.current) return;
-    saveState({ players, formation, starting, subs });
-  }, [players, formation, starting, subs]);
+    saveState({ players, formation, starting, subs, managers });
+  }, [players, formation, starting, subs, managers]);
 
   const byId = (id) => players.find((p) => p.id === id);
   const usedIds = new Set([...Object.values(starting), ...subs].filter(Boolean));
@@ -649,9 +964,12 @@ export default function App() {
 
       {/* header */}
       <div className="px-5 pt-6 pb-3 flex items-center justify-between">
-        <div>
-          <h1 className="font-display font-bold text-3xl leading-none tracking-wide" style={{ color: "#F1F7F3" }}>SQUAD BUILDER</h1>
-          <p className="text-xs mt-0.5" style={{ color: "#5C6E64" }}>{players.length} players in club</p>
+        <div className="flex items-center gap-3">
+          <img src="/pitchlink-icon.png" alt="PitchLink" className="rounded-xl" style={{ width: 40, height: 40 }} />
+          <div>
+            <h1 className="font-display font-bold text-3xl leading-none tracking-wide" style={{ color: "#F1F7F3" }}>PITCH<span style={{ color: "#9BE83A" }}>LINK</span></h1>
+            <p className="text-xs mt-0.5" style={{ color: "#5C6E64" }}>{players.length} players · {managers.length} staff</p>
+          </div>
         </div>
         <div className="text-right">
           <div className="font-display font-bold text-2xl" style={{ color: ovrTier(squadOvr === "—" ? 0 : Number(squadOvr)) }}>{squadOvr}</div>
@@ -660,8 +978,8 @@ export default function App() {
       </div>
 
       {/* tabs */}
-      <div className="px-5 flex gap-2 mb-4">
-        {[["pitch", "Starting XI"], ["bench", "Bench"], ["roster", "Roster"], ["tournaments", "Tournaments"]].map(([k, label]) => (
+      <div className="px-5 flex gap-2 mb-4 flex-wrap">
+        {[["pitch", "Starting XI"], ["bench", "Bench"], ["roster", "Roster"], ["staff", "Staff"], ["tournaments", "Tournaments"]].map(([k, label]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
@@ -771,6 +1089,32 @@ export default function App() {
         </div>
       )}
 
+      {/* STAFF TAB */}
+      {tab === "staff" && (
+        <div className="px-5 pb-24">
+          <button
+            onClick={() => setEditManager(emptyManager())}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg mb-4 text-sm font-medium"
+            style={{ background: "#9BE83A", color: "#0F2308" }}
+          >
+            <Plus size={16} /> Add Manager
+          </button>
+          <div className="space-y-1.5">
+            {managers.map((m) => (
+              <button key={m.id} onClick={() => setViewManager(m)} className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg" style={{ background: "#151F1A", border: "1px solid #223028" }}>
+                <div className="text-left">
+                  <div className="text-[14px]" style={{ color: "#F1F7F3" }}>{m.name || "Unnamed Manager"}</div>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: "#5C6E64" }}>
+                    {m.teamStyles.length ? m.teamStyles.join(" · ") : "No playstyle set"}
+                  </div>
+                </div>
+              </button>
+            ))}
+            {managers.length === 0 && <p className="text-sm text-center py-8" style={{ color: "#5C6E64" }}>No managers yet. Add your first one above.</p>}
+          </div>
+        </div>
+      )}
+
       {/* TOURNAMENTS TAB */}
       {tab === "tournaments" && (
         <div className="px-5 pb-24">
@@ -800,12 +1144,33 @@ export default function App() {
           initial={editPlayer}
           skillsList={skillsList}
           styleList={styleList}
+          additionalSkillsList={additionalSkillsList}
           onAddSkill={addSkill}
           onRemoveSkill={removeSkill}
           onAddStyle={addStyle}
           onRemoveStyle={removeStyle}
+          onAddAdditionalSkill={addAdditionalSkill}
+          onRemoveAdditionalSkill={removeAdditionalSkill}
           onSave={saveNewOrEdited}
           onCancel={() => setEditPlayer(null)}
+        />
+      )}
+      {viewManager && (
+        <ManagerCard
+          manager={viewManager}
+          onClose={() => setViewManager(null)}
+          onEdit={(m) => { setEditManager(m); setViewManager(null); }}
+          onDelete={deleteManager}
+        />
+      )}
+      {editManager && (
+        <ManagerEditor
+          initial={editManager}
+          teamStyleList={teamStyleList}
+          onAddStyle={addTeamStyle}
+          onRemoveStyle={removeTeamStyle}
+          onSave={saveManager}
+          onCancel={() => setEditManager(null)}
         />
       )}
     </div>
